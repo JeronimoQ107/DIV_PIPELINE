@@ -1,5 +1,10 @@
-# DIV_PIPELINE
+
+<div align="center">
+<h1>DIV_PIPELINE</h1>
+</div>
+
 Este repositorio contiene dos implementaciones en Verilog para realizar la división de dos números positivos de `N` bits. El objetivo del proyecto es comparar el rendimiento entre una implementación sin técnicas de *pipelining* y una que sí las incorpora, evaluando la mejora en velocidad proporcionada por el uso de *pipelines*.
+
 
 ---
 
@@ -11,8 +16,7 @@ Este repositorio contiene dos implementaciones en Verilog para realizar la divis
   - [2.2 Análisis Detallado del Código](#22-análisis-detallado-del-código)
 - [3. Divider con Pipeline](#3-divider-con-pipeline)
   - [3.1 Arquitectura Pipeline](#31-arquitectura-pipeline)
-  - [3.2 Descripción del Funcionamiento](#32-descripción-del-funcionamiento)
-  - [3.3 Variables Internas](#33-variables-internas)
+  - [3.2 Análisis Detallado del Código](#32-análisis-detallado-del-código)
 - [4. Comparación de Resultados](#4-comparación-de-resultados)
 
 ---
@@ -126,45 +130,120 @@ Entrega el resultado final y vuelve a esperar un nuevo inicio.
 
 ### 3.1 Arquitectura Pipeline
 
-Este divisor divide el proceso en `N` etapas, cada una ejecutando una operación parcial de la división. En cada etapa:
+Este módulo implementa la división mediante una arquitectura de pipeline de `N` etapas, donde cada etapa procesa un bit del dividendo y actualiza los valores parciales del cociente y residuo. Cada etapa trabaja de manera independiente y en paralelo con las demás, lo que permite una alta tasa de procesamiento una vez que el pipeline se ha llenado.
 
-- Se calcula un nuevo residuo parcial.
-- Se evalúa si se puede restar el divisor.
-- Se desplaza el cociente y se agrega un bit.
+### 3.2 Análisis Detallado del Código
 
-Esto permite que se empiece una nueva operación de división en cada ciclo de reloj (una vez llenado el pipeline).
+#### Definición de parámetros y puertos
+```verilog
+parameter N = 32;
+```
+Define el número de bits para los operandos de entrada y salida.
 
-### 3.2 Descripción del Funcionamiento
+#### Declaración de registros internos
+```verilog
+reg [N:0] remainder_reg [0:N];     // Registros para los residuos en cada etapa
+reg [N-1:0] divisor_reg [0:N];     // Registros del divisor en cada etapa
+reg [N-1:0] quotient_reg [0:N];    // Registros del cociente parcial
+reg [N-1:0] dividend_reg [0:N];    // Registro del dividendo con desplazamiento
+reg ready_flag [0:N];              // Bandera que indica si los datos están listos
+```
+Estos vectores de registros modelan un pipeline profundo con `N` etapas.
 
-- En el ciclo 0, los datos iniciales se cargan en la etapa 0.
-- En cada ciclo, las operaciones parciales pasan a la siguiente etapa.
-- Cuando los datos llegan a la etapa `N`, se obtienen `quotient` y `remainder` finales.
+#### Registro del candidato a residuo
+```verilog
+reg [N:0] candidate;
+```
+Contiene el valor temporal para decidir si se puede restar el divisor del residuo parcial en una etapa determinada.
 
-### 3.3 Variables Internas
+#### Lógica secuencial principal
+```verilog
+always @(posedge clk, posedge rst) begin
+```
+El bloque siempre responde al flanco de subida del reloj o al reset asincrónico.
 
-- `remainder_reg[i]`: Residuo parcial en la etapa `i`.
-- `divisor_reg[i]`: Divisor propagado en la etapa `i`.
-- `quotient_reg[i]`: Cociente parcial acumulado.
-- `dividend_reg[i]`: Registro del dividendo con bits desplazados.
-- `ready_flag[i]`: Señal de habilitación de datos válidos por etapa.
+##### Fase de reinicio
+```verilog
+if (rst) begin
+    for (i = 0; i <= N; i = i + 1) begin
+        remainder_reg[i] <= 0;
+        divisor_reg[i] <= 0;
+        quotient_reg[i] <= 0;
+        ready_flag[i] <= 0;
+        dividend_reg[i] <= 0;
+    end
+    done <= 0;
+```
+Inicializa todos los registros del pipeline a cero.
+
+##### Fase de propagación y cálculo por etapas
+```verilog
+remainder_reg[0] <= 0;
+divisor_reg[0] <= divisor;
+quotient_reg[0] <= 0;
+ready_flag[0] <= start;
+dividend_reg[0] <= dividend;
+```
+Se cargan los datos de entrada en la etapa inicial del pipeline.
+
+```verilog
+for (i = 0; i < N; i = i + 1) begin
+    if (ready_flag[i]) begin
+        candidate = {remainder_reg[i][N-1:0], dividend_reg[i][N-1]};
+        dividend_reg[i+1] <= dividend_reg[i] << 1;
+```
+Calcula el nuevo residuo parcial combinando el residuo anterior con el siguiente bit del dividendo.
+
+```verilog
+if (candidate < {1'b0, divisor_reg[i]}) begin
+    quotient_reg[i+1] <= (quotient_reg[i] << 1);
+    remainder_reg[i+1] <= candidate;
+end else begin
+    quotient_reg[i+1] <= (quotient_reg[i] << 1) | 1'b1;
+    remainder_reg[i+1] <= candidate - {1'b0, divisor_reg[i]};
+end
+```
+Actualiza el cociente y el residuo dependiendo del resultado de la comparación con el divisor.
+
+```verilog
+divisor_reg[i+1] <= divisor_reg[i];
+ready_flag[i+1] <= ready_flag[i];
+```
+Propaga los valores al siguiente nivel del pipeline.
+
+##### Finalización del pipeline
+```verilog
+if (ready_flag[N]) begin
+    quotient <= quotient_reg[N];
+    remainder <= remainder_reg[N][N-1:0];
+    done <= 1;
+end else begin
+    done <= 0;
+end
+```
+Cuando los datos llegan a la etapa final, se asignan los resultados a las salidas.
 
 ---
 
 ## 4. Comparación de Resultados
 
-| Característica                      | Sin Pipeline              | Con Pipeline             |
-| ----------------------------------- | ------------------------- | ------------------------ |
-| Latencia total                      | \~N ciclos                | \~N ciclos               |
-| Throughput (una división por ciclo) | No                        | Sí (después del llenado) |
-| Complejidad de diseño               | Baja                      | Alta                     |
-| Uso de recursos                     | Bajo                      | Alto                     |
-| Ideal para                          | Simplicidad, bajo consumo | Alto rendimiento         |
+La simulación de ambos códigos se realizó en ModelSIM, para este ejemplo, el dividendo es `9` y el divisor es `3`, por lo que se espera que el cociente de la división sea `3` y el residuo `0`. La implementación con pipelines resultó ser más eficiente como se puede apreciar en las figuras de abajo. 
+
+<p align="center">
+  <img src="Images/NoPipelines.jpg" alt="NoPipelines" width="45%" style="margin-right: 10px;"/>
+  <img src="Images/Pipelines.jpg" alt="Pipelines" width="45%"/>
+</p>
+
+La figura de la izquierda muestra el tiempo que toma en realizar la división `9/3` sin el uso de pipelines, en este caso, tal tiempo fue de 0.759 µs aproximadamente. Se puede ver claramente que tanto la variable *quotient* del código `divider` como la del código `unpipelined_divider` tiene un valor de 2'b11, que corresponde al número 3 en decimal.\
+Por otro lado, la figura de la derecha señala que el tiempo en el que la división se realiza con el uso de los pipelines es de 0.739 µs. Además, la variable *quotient* del código `unpipelined_divider` se mantiene en cero, pues aún no ha transcurrido el tiempo suficiente para que se realice la división.
+
+Los resultados de la simulación muestran claramente las ventajas del uso de pipelines en sistemas digitales. Aunque ambos diseños generan el resultado correcto (`quotient = 3`, `remainder = 0`) para la operación `9 ÷ 3`, el diseño con pipelines lo hace en menos tiempo: aproximadamente 0.739 µs frente a los 0.759 µs del diseño secuencial. Esta mejora, aunque leve en este caso simple, se amplifica significativamente en aplicaciones donde múltiples divisiones se ejecutan en serie, permitiendo una mayor tasa de procesamiento (throughput) gracias a la arquitectura en etapas.
 
 ---
 
-## Autores y Licencia
+## Autores
 
-Trabajo realizado para la asignatura de **Sistemas Digitales**.
-
-Licencia: MIT
+Trabajo realizado para la asignatura de **Diseño de Sistemas Digitales**.\
+Autores: Jerónimo Quintero, Samuel Arango, Ivan Pérez\
+Docente: Diego Alejando Franco Alvarez
 
